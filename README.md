@@ -6,6 +6,10 @@ An OpenAI-compatible API gateway that sends each prompt to the **cheapest model 
 A Scikit-learn classifier decides whether a prompt is simple or hard: simple prompts go to a small Llama model, hard ones to a large LLM.
 Repeated questions are served from a semantic cache, and every request is logged with its cost, latency and routing decision.
 
+Built entirely on **free and open-source** components: local models via Ollama, the large model via Groq's free tier, and self-hosted Redis, PostgreSQL and Arize Phoenix.
+
+**Design:** [docs/architecture.md](docs/architecture.md)
+
 ## Why
 
 Most production LLM traffic is simple: lookups, rewrites, short classifications. Sending all of it to a frontier model wastes money and adds latency.
@@ -19,8 +23,8 @@ flowchart LR
     G --> K{Semantic cache<br/>Redis + embeddings}
     K -- hit --> C
     K -- miss --> R[Router<br/>Scikit-learn classifier]
-    R -- simple --> S[Small model<br/>Llama]
-    R -- hard --> L[Large model<br/>Amazon Bedrock]
+    R -- simple --> S[Small model<br/>Llama 3.2 3B, Ollama]
+    R -- hard --> L[Large model<br/>Llama 3.3 70B, Groq free tier]
     S -- fails quality check --> L
     S --> G
     L --> G
@@ -33,29 +37,29 @@ flowchart LR
 - **Learned router:** a Scikit-learn text classifier trained on a Pandas-labelled set of easy and hard prompts.
 - **Fallback:** escalates to the large model when the small model's answer fails a check.
 - **Semantic cache:** answers a repeated question by meaning, not exact text, using embeddings in Redis.
-- **Cost and latency tracing:** per-request logs, plus a `/stats` endpoint.
+- **Cost and latency tracing:** per-request logs, OpenTelemetry traces in Arize Phoenix, plus a `/stats` endpoint.
 - **API keys and rate limiting** per client.
 
 ## Tech stack
 
-Python · FastAPI · Pandas · Scikit-learn · Llama (Ollama locally, Amazon Bedrock in the cloud) · Amazon Bedrock · Redis · PostgreSQL · Docker Compose · pytest · GitHub Actions
+Python · FastAPI · Pandas · Scikit-learn · fastembed (bge-small) · Llama via Ollama · Groq (free tier) · Redis 8 · PostgreSQL · OpenTelemetry + Arize Phoenix · Docker Compose · pytest · GitHub Actions
 
 ## Benchmark
 
-About 300 prompts run three ways (always-large, always-small, routed), with answer quality scored by an LLM-as-judge.
+Held-out test prompts (from a 600-prompt labelled set the router never trained on) run three ways: always-large, always-small and routed. Answer quality is scored by a pairwise LLM-as-judge.
 
-| Setup | Cost per 1K requests | Quality score | p95 latency |
+| Setup | Notional cost per 1K requests | Quality score | p95 latency |
 |---|---|---|---|
 | Always large model | TBD | TBD | TBD |
 | Always small model | TBD | TBD | TBD |
 | **Routed** | TBD | TBD | TBD |
 
-*Results will be published here when the benchmark runs.*
+*Results will be published here when the benchmark runs. All models are free, so cost is a notional estimate from a dated reference price table ([details](docs/architecture.md#56-cost-model)).*
 
 ## Roadmap
 
 - [ ] FastAPI gateway with OpenAI-compatible endpoint
-- [ ] Llama (Ollama) and Amazon Bedrock clients
+- [ ] Ollama (local) and Groq (free tier) clients with offline fallback
 - [ ] Request logging to PostgreSQL
 - [ ] Labelled prompt dataset and Scikit-learn router
 - [ ] Quality-check fallback
