@@ -17,6 +17,7 @@ from app.providers import ProviderError, ProviderResult
 from app.router import RouteDecision
 
 KEY = "gw_testkey"
+OTHER_KEY = "gw_otherkey"
 AUTH = {"Authorization": f"Bearer {KEY}"}
 LOG_COLUMNS = [f.name for f in fields(RequestLogEntry)]
 
@@ -25,11 +26,11 @@ class FakePool:
     """Stands in for asyncpg: knows one API key and records request_log inserts."""
 
     def __init__(self):
-        self.key_id = uuid4()
+        self.keys = {hashlib.sha256(k.encode()).hexdigest(): uuid4() for k in (KEY, OTHER_KEY)}
         self.logs: list[tuple] = []
 
     async def fetchval(self, sql, key_hash):
-        return self.key_id if key_hash == hashlib.sha256(KEY.encode()).hexdigest() else None
+        return self.keys.get(key_hash)
 
     async def execute(self, sql, *args):
         self.logs.append(args)
@@ -186,6 +187,16 @@ async def test_cache_hit_skips_providers():
         r = await c.post("/v1/chat/completions", json=body(temperature=0), headers=AUTH)
     assert r.headers["x-route"] == "cache"
     assert len(deps.providers.calls) == 1
+
+
+async def test_cache_scoped_per_api_key():
+    deps = make_deps()
+    other = {"Authorization": f"Bearer {OTHER_KEY}"}
+    async with client(deps) as c:
+        await c.post("/v1/chat/completions", json=body(temperature=0), headers=AUTH)
+        r = await c.post("/v1/chat/completions", json=body(temperature=0), headers=other)
+    assert r.headers["x-route"] != "cache"
+    assert len(deps.providers.calls) == 2
 
 
 async def test_fallback_answer_not_cached():

@@ -80,9 +80,11 @@ async def build_deps(settings: Settings) -> Deps:
     )
 
 
-def params_hash(req: ChatCompletionRequest) -> str:
+def params_hash(req: ChatCompletionRequest, key_id) -> str:
+    """Cache context: an entry only matches the same API key, system prompt and parameters."""
     system = next((m.text() for m in req.messages if m.role == "system"), None)
     params = {
+        "api_key_id": str(key_id),
         "system_prompt": system,
         "temperature": req.temperature,
         "max_tokens": req.max_tokens,
@@ -168,7 +170,7 @@ async def handle_completion(request: Request, deps: Deps) -> JSONResponse:
 
     start = time.perf_counter()
     use_cache = cacheable(req)
-    p_hash = params_hash(req) if use_cache else ""
+    p_hash = params_hash(req, key_id) if use_cache else ""
 
     # 4. Semantic cache (fails open)
     if use_cache:
