@@ -137,9 +137,7 @@ async def handle_completion(request: Request, deps: Deps) -> JSONResponse:
 
     # 2. Rate limit (fails open)
     try:
-        limit = await check_rate_limit(
-            deps.redis, str(key_id), deps.settings.rate_limit_per_minute
-        )
+        limit = await check_rate_limit(deps.redis, str(key_id), deps.settings.rate_limit_per_minute)
         if not limit.allowed:
             return error_response(
                 429,

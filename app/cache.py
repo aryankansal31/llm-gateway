@@ -19,7 +19,7 @@ PREFIX = "gwcache:"
 
 
 def cacheable(req: ChatCompletionRequest) -> bool:
-    """Single-turn, near-deterministic requests only, so stale context never leaks into an answer."""
+    """Single-turn, near-deterministic requests only; stale context never leaks into answers."""
     roles = [m.role for m in req.messages]
     return (
         roles.count("user") == 1
