@@ -22,7 +22,7 @@ def _hash(raw_key: str) -> str:
 
 
 async def create_api_key(pool: asyncpg.Pool, name: str) -> str:
-    """Create a key and return it. Only its SHA-256 is stored, so this is the one chance to see it."""
+    """Create a key and return it raw. Only its SHA-256 is stored; this is the only copy."""
     raw = "gw_" + secrets.token_urlsafe(32)
     await pool.execute("INSERT INTO api_keys (name, key_hash) VALUES ($1, $2)", name, _hash(raw))
     return raw
@@ -76,9 +76,7 @@ WHERE ts >= now() - $1::interval
 """
 
 
-async def fetch_stats(
-    pool: asyncpg.Pool, window: timedelta, prices: dict[str, TierPrice]
-) -> dict:
+async def fetch_stats(pool: asyncpg.Pool, window: timedelta, prices: dict[str, TierPrice]) -> dict:
     row = await pool.fetchrow(_STATS_SQL, window)
     by_route = await pool.fetch(
         "SELECT route, count(*) AS n FROM request_log WHERE ts >= now() - $1::interval"
