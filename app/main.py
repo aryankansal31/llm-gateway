@@ -4,12 +4,15 @@ import asyncio
 import hashlib
 import json
 import logging
+import re
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from datetime import timedelta
 from decimal import Decimal
 from typing import Any
 
+import httpx
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -33,6 +36,7 @@ from app.schemas import (
     Usage,
     error_response,
 )
+from app.telemetry import setup_tracing, tracer
 
 log = logging.getLogger(__name__)
 
@@ -98,6 +102,7 @@ def create_app(deps: Deps | None = None) -> FastAPI:
     async def lifespan(app: FastAPI):
         if deps is None:
             app.state.deps = await build_deps(get_settings())
+            setup_tracing(app, app.state.deps.settings.phoenix_endpoint)
         yield
         if deps is None:
             built: Deps = app.state.deps
@@ -108,6 +113,7 @@ def create_app(deps: Deps | None = None) -> FastAPI:
     app = FastAPI(title="Cost-aware LLM Gateway", version="0.1.0", lifespan=lifespan)
     if deps is not None:
         app.state.deps = deps
+        setup_tracing(app, deps.settings.phoenix_endpoint)
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(request: Request, exc: RequestValidationError):
@@ -121,7 +127,47 @@ def create_app(deps: Deps | None = None) -> FastAPI:
     async def chat_completions(request: Request) -> JSONResponse:
         return await handle_completion(request, request.app.state.deps)
 
+    @app.get("/v1/models")
+    async def list_models() -> dict:
+        return {
+            "object": "list",
+            "data": [{"id": m, "object": "model", "owned_by": "llm-gateway"} for m in MODELS],
+        }
+
+    @app.get("/stats")
+    async def stats(request: Request, window: str = "24h") -> JSONResponse:
+        match = re.fullmatch(r"(\d+)([hd])", window)
+        if not match:
+            msg = "window must look like 24h or 7d."
+            return error_response(400, msg, "invalid_request_error", "invalid_window")
+        n, unit = int(match[1]), match[2]
+        delta = timedelta(hours=n) if unit == "h" else timedelta(days=n)
+        deps: Deps = request.app.state.deps
+        return JSONResponse(await db.fetch_stats(deps.pool, delta, deps.prices))
+
+    @app.get("/health")
+    async def health(request: Request) -> JSONResponse:
+        deps: Deps = request.app.state.deps
+        checks = {
+            "redis": deps.redis.ping(),
+            "postgres": deps.pool.fetchval("SELECT 1"),
+            "ollama": ollama_alive(deps.settings.ollama_base_url),
+        }
+        results = await asyncio.gather(*checks.values(), return_exceptions=True)
+        body = {
+            name: "down" if isinstance(r, BaseException) or r is False else "ok"
+            for name, r in zip(checks, results, strict=True)
+        }
+        status = 200 if all(v == "ok" for v in body.values()) else 503
+        return JSONResponse(body, status_code=status)
+
     return app
+
+
+async def ollama_alive(ollama_base_url: str) -> bool:
+    root = ollama_base_url.removesuffix("/").removesuffix("/v1")
+    async with httpx.AsyncClient(timeout=3) as http:
+        return (await http.get(f"{root}/api/version")).status_code == 200
 
 
 async def handle_completion(request: Request, deps: Deps) -> JSONResponse:
@@ -175,7 +221,8 @@ async def handle_completion(request: Request, deps: Deps) -> JSONResponse:
     # 4. Semantic cache (fails open)
     if use_cache:
         try:
-            cached = await deps.cache.get(messages, p_hash)
+            with tracer.start_as_current_span("cache.lookup"):
+                cached = await deps.cache.get(messages, p_hash)
         except REDIS_ERRORS as e:
             log.warning("cache unavailable, skipping lookup: %s", e)
             cached = None
@@ -187,7 +234,10 @@ async def handle_completion(request: Request, deps: Deps) -> JSONResponse:
             return await finish(deps, key_id, result, None, False, start)
 
     # 5. Route
-    decision = await asyncio.to_thread(deps.router.decide, req.model, messages)
+    with tracer.start_as_current_span("router.decide") as span:
+        decision = await asyncio.to_thread(deps.router.decide, req.model, messages)
+        span.set_attribute("route.tier", decision.tier)
+        span.set_attribute("route.reason", decision.reason)
 
     # 6-7. Dispatch, with quality-check fallback from small to large
     json_mode = (req.response_format or {}).get("type") == "json_object"
@@ -197,7 +247,8 @@ async def handle_completion(request: Request, deps: Deps) -> JSONResponse:
         result = None
         if decision.tier == "small":
             try:
-                result = await deps.providers.complete("small", *args)
+                with tracer.start_as_current_span("model.call"):
+                    result = await deps.providers.complete("small", *args)
                 reason = check_answer(result.text, result.finish_reason, json_mode)
                 if reason:
                     log.info("small answer failed the quality check (%s); escalating", reason)
@@ -206,7 +257,9 @@ async def handle_completion(request: Request, deps: Deps) -> JSONResponse:
                 log.warning("small tier unavailable (%s); escalating", e)
                 fallback = True
         if result is None:
-            result = await deps.providers.complete("large", *args)
+            span_name = "fallback" if fallback else "model.call"
+            with tracer.start_as_current_span(span_name):
+                result = await deps.providers.complete("large", *args)
     except ProviderError as e:
         await log_request(
             deps,
