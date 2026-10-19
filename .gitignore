@@ -16,3 +16,6 @@ data/raw/
 *.faiss
 *.log
 .DS_Store
+.superpowers/
+data/*
+!data/.gitkeep

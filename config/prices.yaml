@@ -1,0 +1,7 @@
+# Notional reference prices. Every model in this project is free; these only estimate what routing would save.
+as_of: "2026-10-19"   # re-check on the day you run the benchmark and update this date
+source: "Groq on-demand list prices for comparable hosted models"
+tiers:
+  small:         { usd_per_1m_input: 0.06, usd_per_1m_output: 0.06 }
+  large:         { usd_per_1m_input: 0.59, usd_per_1m_output: 0.79 }
+  large_offline: { usd_per_1m_input: 0.05, usd_per_1m_output: 0.08 }

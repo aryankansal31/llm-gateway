@@ -1,0 +1,8 @@
+# Every model name used by the gateway and the offline scripts lives here.
+# Before building, confirm the Groq models are still on the free tier at https://console.groq.com
+tiers:
+  small:         { provider: ollama, model: "llama3.2:3b" }
+  large:         { provider: groq,   model: "llama-3.3-70b-versatile" }
+  large_offline: { provider: ollama, model: "llama3.1:8b" }
+  # A different model family from `large`, to reduce self-preference bias when judging.
+  judge:         { provider: groq,   model: "openai/gpt-oss-120b" }
