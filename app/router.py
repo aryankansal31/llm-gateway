@@ -27,6 +27,7 @@ class Router:
         self.small_max_prompt_tokens = small_max_prompt_tokens
         self.artifact = None
         if model_path.exists():
+            # Trusted input: the artifact is produced by scripts/train_router.py in this repo.
             self.artifact = joblib.load(model_path)
             assert self.artifact["feature_version"] == FEATURE_VERSION
         else:
